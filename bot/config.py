@@ -85,6 +85,7 @@ class Config:
     # Друк
     paper_width_mm: float
     paper_length_mm: float
+    paper_max_length_mm: float
     dots_per_mm: int
     content_align: str
     content_top_mm: float
@@ -106,6 +107,11 @@ class Config:
 
     def is_allowed(self, user_id: int) -> bool:
         return (not self.restricted) or user_id in self.allowed_user_ids
+
+    @property
+    def max_print_length(self) -> int:
+        """Стеля довжини листка в точках; 0 — без обмеження."""
+        return round(self.paper_max_length_mm * self.dots_per_mm)
 
     @property
     def paper_size(self) -> str:
@@ -168,6 +174,7 @@ def load_config() -> Config:
         header_text=_str("HEADER_TEXT", "Аннозачатіївський Храм"),
         paper_width_mm=paper_width_mm,
         paper_length_mm=paper_length_mm,
+        paper_max_length_mm=_float("PAPER_MAX_LENGTH_MM", 0.0),
         dots_per_mm=dots_per_mm,
         content_align=_str("CONTENT_ALIGN", "top").lower(),
         content_top_mm=_float("CONTENT_TOP_MM", 6.0),

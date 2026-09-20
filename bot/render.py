@@ -24,6 +24,7 @@ RULE_WIDTH_RATIO = 0.55
 GAP_BEFORE_RULE = 14
 GAP_AFTER_RULE = 14
 GAP_AFTER_IMAGE = 10
+BOTTOM_PAD = 16
 
 
 @dataclass
@@ -182,30 +183,32 @@ def _render_content(cfg: Config, receipt: Receipt) -> Image.Image:
 def render_receipt(cfg: Config, receipt: Receipt) -> Image.Image:
     """Готове ч/б зображення листка.
 
-    При заданому PAPER_LENGTH_MM вміст лягає на полотно фіксованого розміру
-    (зверху або по центру — CONTENT_ALIGN), інакше висота полотна
-    дорівнює висоті тексту.
+    PAPER_LENGTH_MM — мінімальна довжина листка. Якщо імен багато і вміст
+    не влазить, листок подовжується (кратно міліметру), щоб нічого не
+    стискати. PAPER_MAX_LENGTH_MM ставить стелю, 0 — без обмеження.
     """
     content = _render_content(cfg, receipt)
 
     if cfg.print_length <= 0:
         sheet = content
     else:
-        height = cfg.print_length
-        if content.height > height:
-            log.warning(
-                "Вміст (%s точок) не влазить у листок %s точок — "
-                "полотно збільшено, листок вийде довшим",
-                content.height, height,
-            )
-            height = content.height
+        step = cfg.dots_per_mm
+        margin = round(cfg.content_top_mm * step)
+        needed = margin + content.height + BOTTOM_PAD
+        height = max(cfg.print_length, -(-needed // step) * step)
+
+        limit = cfg.max_print_length
+        if limit and height > limit:
+            log.warning("Листок %s точок обрізано до стелі %s", height, limit)
+            height = limit
+
         sheet = Image.new("L", (cfg.print_width, height), 255)
-        offset = round(cfg.content_offset_mm * cfg.dots_per_mm)
+        offset = round(cfg.content_offset_mm * step)
         if cfg.content_align == "top":
-            top = round(cfg.content_top_mm * cfg.dots_per_mm) + offset
+            top = margin + offset
         else:
             top = (height - content.height) // 2 + offset
-        top = max(0, min(top, height - content.height))
+        top = max(0, min(top, max(0, height - content.height)))
         sheet.paste(content, (0, top))
 
     # поріг без дизерингу: текст на чеку має бути чітким
