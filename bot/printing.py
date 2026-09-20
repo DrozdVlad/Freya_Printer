@@ -37,11 +37,14 @@ def _profile(width_pixels: int, width_mm: int):
     return klass(features=data["features"])
 
 
+def _width_mm(cfg: Config) -> int:
+    return round(cfg.print_width / cfg.dots_per_mm)
+
+
 def _build_printer(cfg: Config):
     from escpos import printer as esc
 
-    width_mm = 72 if cfg.print_width >= 576 else 48
-    profile = _profile(cfg.print_width, width_mm)
+    profile = _profile(cfg.print_width, _width_mm(cfg))
 
     if cfg.backend == "network":
         return esc.Network(host=cfg.host, port=cfg.port, timeout=cfg.timeout, profile=profile)
@@ -70,16 +73,36 @@ def _build_printer(cfg: Config):
     return esc.Dummy(profile=profile)
 
 
+def _encode_copy(cfg: Config, image: Image.Image) -> bytes:
+    """Кодує одну копію в ESC/POS один раз.
+
+    Растр важить ~80 КБ, тож для N копій кодуємо його один раз
+    і просто повторюємо готовий блок байтів.
+    """
+    from escpos.printer import Dummy
+
+    job = Dummy(profile=_profile(cfg.print_width, _width_mm(cfg)))
+    job.hw("INIT")
+    job.image(image, impl="bitImageRaster", center=False)
+    if cfg.print_length > 0:
+        # Полотно вже потрібної довжини: одразу подача до ножа і відріз
+        # (GS V 66 0), щоб листок вийшов рівно заданого розміру.
+        if cfg.cut_paper:
+            job.cut(feed=False)
+    else:
+        job.text("\n" * cfg.feed_lines)
+        if cfg.cut_paper:
+            job.cut()
+    return bytes(job.output)
+
+
 def _print_sync(cfg: Config, image: Image.Image, copies: int) -> None:
+    payload = _encode_copy(cfg, image)
     device = _build_printer(cfg)
     try:
         device.open()
-        device.hw("INIT")
         for index in range(copies):
-            device.image(image, impl="bitImageRaster", center=False)
-            device.text("\n" * cfg.feed_lines)
-            if cfg.cut_paper:
-                device.cut()
+            device._raw(payload)
             log.info("Надруковано копію %s/%s", index + 1, copies)
     except Exception as exc:  # noqa: BLE001 — показуємо користувачу причину
         raise PrinterError(str(exc)) from exc

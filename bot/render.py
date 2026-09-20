@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
@@ -12,6 +13,8 @@ from functools import lru_cache
 from PIL import Image, ImageDraw, ImageFont
 
 from .config import Config
+
+log = logging.getLogger(__name__)
 
 MARGIN_TOP = 16
 MARGIN_BOTTOM = 24
@@ -89,8 +92,8 @@ def _blocks(cfg: Config, receipt: Receipt) -> list[tuple[str, object]]:
     return items
 
 
-def render_receipt(cfg: Config, receipt: Receipt) -> Image.Image:
-    """Повертає готове ч/б зображення записки на всю ширину друку."""
+def _render_content(cfg: Config, receipt: Receipt) -> Image.Image:
+    """Малює вміст записки; висота — рівно стільки, скільки треба тексту."""
     width = cfg.print_width
     max_text_width = width - 2 * SIDE_PADDING
 
@@ -130,16 +133,50 @@ def render_receipt(cfg: Config, receipt: Receipt) -> Image.Image:
             draw.text((centre, y), line, font=font, fill=0, anchor="ma")
         y += _line_height(font)
 
-    # Поріг без дизерингу — текст на чеку виходить чітким
-    return canvas.point(lambda p: 255 if p > 150 else 0).convert("1")
+    return canvas
 
 
-def render_preview(cfg: Config, receipt: Receipt) -> Image.Image:
-    """Те саме зображення, але на сірому тлі — для перегляду в Telegram."""
-    receipt_img = render_receipt(cfg, receipt).convert("L")
-    pad = 24
+def render_receipt(cfg: Config, receipt: Receipt) -> Image.Image:
+    """Готове ч/б зображення листка.
+
+    Якщо задано PAPER_LENGTH_MM, вміст розміщується по центру полотна
+    фіксованого розміру (за ТЗ — 70×148 мм), і принтер відрізає рівно
+    такий листок. Якщо довжина 0 — полотно по висоті тексту.
+    """
+    content = _render_content(cfg, receipt)
+
+    if cfg.print_length <= 0:
+        sheet = content
+    else:
+        height = cfg.print_length
+        if content.height > height:
+            log.warning(
+                "Вміст (%s точок) не влазить у листок %s точок — "
+                "полотно збільшено, листок вийде довшим",
+                content.height, height,
+            )
+            height = content.height
+        sheet = Image.new("L", (cfg.print_width, height), 255)
+        offset = round(cfg.content_offset_mm * cfg.dots_per_mm)
+        top = (height - content.height) // 2 + offset
+        top = max(0, min(top, height - content.height))
+        sheet.paste(content, (0, top))
+
+    # Поріг без дизерингу, одразу в 1 біт — текст на чеку виходить чітким
+    return sheet.point(lambda value: 255 if value > 150 else 0, mode="1")
+
+
+def preview_frame(sheet: Image.Image) -> Image.Image:
+    """Обрамляє готовий листок сірим тлом — для перегляду в Telegram."""
+    receipt_img = sheet.convert("L")
+    pad = 20
     canvas = Image.new(
-        "L", (receipt_img.width + 2 * pad, receipt_img.height + 2 * pad), 225
+        "L", (receipt_img.width + 2 * pad, receipt_img.height + 2 * pad), 210
     )
     canvas.paste(receipt_img, (pad, pad))
+    # Рамка = межі листка, щоб було видно реальні поля
+    ImageDraw.Draw(canvas).rectangle(
+        [pad - 1, pad - 1, pad + receipt_img.width, pad + receipt_img.height],
+        outline=120, width=1,
+    )
     return canvas

@@ -21,7 +21,7 @@ from . import texts as T
 from .config import Config, load_config
 from .dt import now_in, parse_datetime
 from .printing import PrinterError, check_printer, print_image
-from .render import Receipt, render_preview, render_receipt
+from .render import Receipt, preview_frame, render_receipt
 
 log = logging.getLogger("printer-bot")
 
@@ -31,6 +31,7 @@ KEY_PROCEDURE = "procedure_key"
 KEY_WHEN = "when"
 KEY_NAMES = "names"
 KEY_COPIES = "copies"
+KEY_SHEET = "sheet"
 
 
 # ── Клавіатури ──────────────────────────────────────────────────────────────
@@ -93,7 +94,10 @@ def summary(context: ContextTypes.DEFAULT_TYPE) -> str:
 
 async def send_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cfg = cfg_of(context)
-    image = render_preview(cfg, build_receipt(context))
+    # Рендеримо листок один раз: та сама картинка піде і в прев'ю, і на друк.
+    sheet = render_receipt(cfg, build_receipt(context))
+    context.user_data[KEY_SHEET] = sheet
+    image = preview_frame(sheet)
     buffer = io.BytesIO()
     image.convert("RGB").save(buffer, format="PNG")
     buffer.seek(0)
@@ -206,9 +210,9 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     copies = context.user_data[KEY_COPIES]
     notice = await update.message.reply_text(T.PRINTING,
                                              reply_markup=ReplyKeyboardRemove())
-    image = render_receipt(cfg, build_receipt(context))
+    sheet = context.user_data.get(KEY_SHEET) or render_receipt(cfg, build_receipt(context))
     try:
-        await print_image(cfg, image, copies)
+        await print_image(cfg, sheet, copies)
     except PrinterError as exc:
         log.exception("Друк не вдався")
         await notice.edit_text(
@@ -273,6 +277,7 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def post_init(application: Application) -> None:
     cfg: Config = application.bot_data["cfg"]
     log.info("Принтер: %s", cfg.describe_printer())
+    log.info("Листок: %s", cfg.paper_size)
     log.info("Доступ: %s", ", ".join(map(str, sorted(cfg.allowed_user_ids)))
              if cfg.restricted else "усім (ALLOWED_USER_IDS порожній)")
 

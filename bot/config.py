@@ -21,6 +21,11 @@ def _int(name: str, default: int) -> int:
     return int(raw) if raw else default
 
 
+def _float(name: str, default: float) -> float:
+    raw = _str(name).replace(",", ".")
+    return float(raw) if raw else default
+
+
 def _bool(name: str, default: bool) -> bool:
     raw = _str(name).lower()
     if not raw:
@@ -65,7 +70,12 @@ class Config:
     file_path: str
 
     # Друк
+    paper_width_mm: float
+    paper_length_mm: float
+    dots_per_mm: int
+    content_offset_mm: float
     print_width: int
+    print_length: int
     font_path: Path
     font_size_title: int
     font_size_body: int
@@ -82,6 +92,11 @@ class Config:
     def is_allowed(self, user_id: int) -> bool:
         return (not self.restricted) or user_id in self.allowed_user_ids
 
+    @property
+    def paper_size(self) -> str:
+        return (f"{self.paper_width_mm:g}×{self.paper_length_mm:g} мм "
+                f"({self.print_width}×{self.print_length} точок)")
+
     def describe_printer(self) -> str:
         if self.backend == "network":
             return f"network {self.host}:{self.port}"
@@ -95,6 +110,16 @@ class Config:
 
 
 def load_config() -> Config:
+    # Геометрія паперу. 203 dpi = рівно 8 точок на міліметр.
+    dots_per_mm = _int("DOTS_PER_MM", 8)
+    paper_width_mm = _float("PAPER_WIDTH_MM", 72.0)
+    paper_length_mm = _float("PAPER_LENGTH_MM", 148.0)
+
+    # Ширину можна задати явно в точках, інакше рахуємо з міліметрів.
+    print_width = _int("PRINT_WIDTH", 0) or round(paper_width_mm * dots_per_mm)
+    # Довжина 0 => стрічка рветься по вмісту (старий режим).
+    print_length = round(paper_length_mm * dots_per_mm) if paper_length_mm > 0 else 0
+
     font_path = Path(_str("FONT_PATH", "fonts/Lora-Regular.ttf"))
     if not font_path.is_absolute():
         font_path = BASE_DIR / font_path
@@ -113,11 +138,16 @@ def load_config() -> Config:
         serial_port=_str("PRINTER_SERIAL_PORT", "/dev/ttyUSB0"),
         serial_baudrate=_int("PRINTER_SERIAL_BAUDRATE", 115200),
         file_path=_str("PRINTER_FILE_PATH", "/dev/usb/lp0"),
-        print_width=_int("PRINT_WIDTH", 576),
+        paper_width_mm=paper_width_mm,
+        paper_length_mm=paper_length_mm,
+        dots_per_mm=dots_per_mm,
+        content_offset_mm=_float("CONTENT_OFFSET_MM", 0.0),
+        print_width=print_width,
+        print_length=print_length,
         font_path=font_path,
-        font_size_title=_int("FONT_SIZE_TITLE", 36),
-        font_size_body=_int("FONT_SIZE_BODY", 32),
-        font_size_small=_int("FONT_SIZE_SMALL", 26),
+        font_size_title=_int("FONT_SIZE_TITLE", 46),
+        font_size_body=_int("FONT_SIZE_BODY", 40),
+        font_size_small=_int("FONT_SIZE_SMALL", 32),
         feed_lines=_int("FEED_LINES", 4),
         cut_paper=_bool("CUT_PAPER", True),
         max_copies=_int("MAX_COPIES", 50),
@@ -126,6 +156,10 @@ def load_config() -> Config:
 
     if cfg.backend not in {"network", "usb", "serial", "file", "dummy"}:
         raise ValueError(f"Невідомий PRINTER_BACKEND: {cfg.backend!r}")
+    if cfg.print_width % 8 != 0:
+        raise ValueError(
+            f"Ширина друку має бути кратна 8 точкам, зараз {cfg.print_width}"
+        )
     if not cfg.font_path.exists():
         raise FileNotFoundError(f"Не знайдено шрифт: {cfg.font_path}")
     return cfg

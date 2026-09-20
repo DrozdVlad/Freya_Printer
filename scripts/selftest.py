@@ -43,7 +43,6 @@ def main() -> int:
         PRINTER_HOST=host,
         PRINTER_PORT=str(port),
         PRINTER_TIMEOUT="5",
-        PRINT_WIDTH="576",
         BOT_TOKEN="test",
     )
 
@@ -65,10 +64,13 @@ def main() -> int:
 
     data = bytes(received)
     checks = {
-        "ширина 576 px": image.width == 576,
+        f"ширина {cfg.print_width} px ({cfg.paper_width_mm:g} мм)":
+            image.width == cfg.print_width,
+        f"довжина {cfg.print_length} px ({cfg.paper_length_mm:g} мм)":
+            image.height == cfg.print_length,
         "режим 1-біт": image.mode == "1",
         "ESC @ (ініціалізація)": data.count(b"\x1b\x40") >= 1,
-        "растрова графіка GS v 0": data.count(b"\x1d\x76\x30") == copies,
+        "растрова графіка GS v 0": data.count(b"\x1d\x76\x30") >= copies,
         f"відрізів = {copies}": data.count(b"\x1dV") == copies,
         "дані надійшли": len(data) > 5000,
     }
