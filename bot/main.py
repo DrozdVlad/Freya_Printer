@@ -52,6 +52,9 @@ ACTIVE_MEMBER_STATUSES = frozenset({
 ACCESS_TTL = 300.0
 ACCESS_DENY_TTL = 60.0
 
+# systemd не перезапускає сервіс з цим кодом
+EXIT_CONFIG = 78
+
 
 # Клавіатури
 def kb(rows: list[list[str]]) -> ReplyKeyboardMarkup:
@@ -83,8 +86,8 @@ def cfg_of(context: ContextTypes.DEFAULT_TYPE) -> Config:
     return context.application.bot_data["cfg"]
 
 
-def state_of(context: ContextTypes.DEFAULT_TYPE) -> State:
-    return context.application.bot_data["state"]
+def state_of(context: ContextTypes.DEFAULT_TYPE) -> State | None:
+    return context.application.bot_data.get("state")
 
 
 def bound_chat(context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -92,8 +95,9 @@ def bound_chat(context: ContextTypes.DEFAULT_TYPE) -> int:
     cfg = cfg_of(context)
     if cfg.allowed_chat_id:
         return cfg.allowed_chat_id
+    state = state_of(context)
     try:
-        return int(state_of(context).get("chat_id") or 0)
+        return int(state.get("chat_id") or 0) if state else 0
     except (TypeError, ValueError):
         return 0
 
@@ -364,6 +368,8 @@ async def on_bot_membership(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     cfg, state = cfg_of(context), state_of(context)
+    if state is None:
+        return
     if event.new_chat_member.status in {ChatMemberStatus.LEFT, ChatMemberStatus.BANNED}:
         if state.get("chat_id") == chat.id:
             log.warning("Бота видалено з чату %s — доступ за участю більше не працює",
@@ -465,9 +471,14 @@ def main() -> None:
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
-    cfg = load_config()
+    try:
+        cfg = load_config()
+    except (ValueError, FileNotFoundError) as exc:
+        log.error("Помилка конфігурації: %s", exc)
+        raise SystemExit(EXIT_CONFIG) from exc
     if not cfg.bot_token:
-        raise SystemExit("BOT_TOKEN не заданий. Скопіюйте .env.example у .env.")
+        log.error("BOT_TOKEN не заданий. Впишіть його у .env і перезапустіть сервіс.")
+        raise SystemExit(EXIT_CONFIG)
 
     application = build_application(cfg)
     log.info("Бот запускається…")

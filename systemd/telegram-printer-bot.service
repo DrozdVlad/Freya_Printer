@@ -14,6 +14,8 @@ WorkingDirectory=/opt/printer-bot
 ExecStart=/opt/printer-bot/.venv/bin/python -m bot.main
 Restart=always
 RestartSec=5
+# Код 78 — помилка конфігурації: перезапуск не допоможе, чекаємо на людину
+RestartPreventExitStatus=78
 # Якщо Telegram недоступний довго — не здаватися
 StartLimitIntervalSec=0
 StandardOutput=journal
