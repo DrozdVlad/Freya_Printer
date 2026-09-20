@@ -23,15 +23,32 @@ Citizen CT-E351 (ESC/POS). Текст рендерится шрифтом **Lora
 ## Что печатается
 
 ```
-        ЗА УПОКІЙ
-  замовна панахида
-  ───────────────
-     21.09.2026
-       09:30
-  ───────────────
-   Іван Петренко
-   Марія Коваль
-  ───────────────
+    [рисунок храма]
+ Аннозачатіївський Храм
+  ─────────────────
+       ЗА УПОКІЙ
+   замовна панахида
+  ─────────────────
+      21.09.2026
+        09:30
+  ─────────────────
+    Іван Петренко
+     Марія Коваль
+  ─────────────────
+```
+
+Шапка — картинка `assets/header.png` (храм) и подпись под ней.
+Заменить рисунок: положить свой PNG на это место, он сам
+отмасштабируется под `HEADER_IMAGE_WIDTH_MM` и переведётся в 1 бит.
+
+```
+HEADER_IMAGE=assets/header.png   # пусто = печатать без картинки
+HEADER_IMAGE_WIDTH_MM=35
+HEADER_DITHER=threshold          # dither — если картинка с полутонами
+HEADER_THRESHOLD=140             # ниже = тоньше линии, выше = жирнее
+HEADER_TEXT=Аннозачатіївський Храм
+CONTENT_ALIGN=top                # храм вверху листка; center — по центру
+CONTENT_TOP_MM=6
 ```
 
 ## Размер листка
@@ -86,6 +103,8 @@ journalctl -u telegram-printer-bot -f     # логи в реальном вре�
 | `PRINTER_USB_VENDOR/PRODUCT` | для USB (смотреть в `lsusb`) |
 | `PAPER_WIDTH_MM` / `PAPER_LENGTH_MM` | размер листка в мм (72 × 148) |
 | `CONTENT_OFFSET_MM` | сдвиг содержимого вниз при калибровке |
+| `HEADER_IMAGE` / `HEADER_TEXT` | картинка храма и подпись под ней |
+| `CONTENT_ALIGN` | `top` (по умолчанию) или `center` |
 | `FONT_SIZE_TITLE/BODY` | размеры шрифта в точках |
 | `CUT_PAPER` | отрезать бумагу после каждой копии |
 | `MAX_COPIES` | защита от случайных 500 копий |
@@ -150,6 +169,7 @@ bot/printing.py  — ESC/POS: сеть/USB/serial, профиль CT-E351, ре�
                    (растр кодируется один раз на всю партию копий)
 bot/main.py      — диалог Telegram
 fonts/           — Lora Regular (OFL), собран из вариативного шрифта
+assets/header.png — рисунок храма для шапки
 systemd/         — unit и udev-правило
 scripts/         — selftest, preview, testprint, discover
 ```

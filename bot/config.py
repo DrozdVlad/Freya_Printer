@@ -1,6 +1,7 @@
 """Конфігурація застосунку. Читається з .env або зі змінних оточення."""
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,6 +44,11 @@ def _opt_hex_int(name: str) -> int | None:
     return int(raw, 0) if raw else None
 
 
+def _resolve(raw: str) -> Path:
+    path = Path(raw)
+    return path if path.is_absolute() else BASE_DIR / path
+
+
 def _ids(name: str) -> frozenset[int]:
     raw = _str(name)
     if not raw:
@@ -69,10 +75,19 @@ class Config:
     serial_baudrate: int
     file_path: str
 
+    # Шапка
+    header_image: Path | None
+    header_image_width_mm: float
+    header_dither: str
+    header_threshold: int
+    header_text: str
+
     # Друк
     paper_width_mm: float
     paper_length_mm: float
     dots_per_mm: int
+    content_align: str
+    content_top_mm: float
     content_offset_mm: float
     print_width: int
     print_length: int
@@ -119,9 +134,18 @@ def load_config() -> Config:
     # 0 => довжина листка по вмісту
     print_length = round(paper_length_mm * dots_per_mm) if paper_length_mm > 0 else 0
 
-    font_path = Path(_str("FONT_PATH", "fonts/Lora-Regular.ttf"))
-    if not font_path.is_absolute():
-        font_path = BASE_DIR / font_path
+    font_path = _resolve(_str("FONT_PATH", "fonts/Lora-Regular.ttf"))
+
+    header_image = None
+    raw_header = _str("HEADER_IMAGE", "assets/header.png")
+    if raw_header:
+        candidate = _resolve(raw_header)
+        if candidate.exists():
+            header_image = candidate
+        else:
+            logging.getLogger(__name__).warning(
+                "Файл шапки %s не знайдено — друкуємо без картинки", candidate
+            )
 
     cfg = Config(
         bot_token=_str("BOT_TOKEN"),
@@ -137,9 +161,16 @@ def load_config() -> Config:
         serial_port=_str("PRINTER_SERIAL_PORT", "/dev/ttyUSB0"),
         serial_baudrate=_int("PRINTER_SERIAL_BAUDRATE", 115200),
         file_path=_str("PRINTER_FILE_PATH", "/dev/usb/lp0"),
+        header_image=header_image,
+        header_image_width_mm=_float("HEADER_IMAGE_WIDTH_MM", 35.0),
+        header_dither=_str("HEADER_DITHER", "threshold").lower(),
+        header_threshold=_int("HEADER_THRESHOLD", 140),
+        header_text=_str("HEADER_TEXT", "Аннозачатіївський Храм"),
         paper_width_mm=paper_width_mm,
         paper_length_mm=paper_length_mm,
         dots_per_mm=dots_per_mm,
+        content_align=_str("CONTENT_ALIGN", "top").lower(),
+        content_top_mm=_float("CONTENT_TOP_MM", 6.0),
         content_offset_mm=_float("CONTENT_OFFSET_MM", 0.0),
         print_width=print_width,
         print_length=print_length,
@@ -155,6 +186,10 @@ def load_config() -> Config:
 
     if cfg.backend not in {"network", "usb", "serial", "file", "dummy"}:
         raise ValueError(f"Невідомий PRINTER_BACKEND: {cfg.backend!r}")
+    if cfg.content_align not in {"top", "center"}:
+        raise ValueError(f"Невідомий CONTENT_ALIGN: {cfg.content_align!r}")
+    if cfg.header_dither not in {"threshold", "dither"}:
+        raise ValueError(f"Невідомий HEADER_DITHER: {cfg.header_dither!r}")
     if cfg.print_width % 8 != 0:
         raise ValueError(
             f"Ширина друку має бути кратна 8 точкам, зараз {cfg.print_width}"

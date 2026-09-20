@@ -23,6 +23,7 @@ RULE_THICKNESS = 2
 RULE_WIDTH_RATIO = 0.55
 GAP_BEFORE_RULE = 14
 GAP_AFTER_RULE = 14
+GAP_AFTER_IMAGE = 10
 
 
 @dataclass
@@ -40,6 +41,32 @@ class Receipt:
     @property
     def time_str(self) -> str:
         return self.when.strftime("%H:%M")
+
+
+@lru_cache(maxsize=4)
+def _header(path: str, mtime: float, width: int, dither: str,
+            threshold: int) -> Image.Image:
+    """Готує картинку шапки: масштаб під ширину стрічки і 1 біт."""
+    with Image.open(path) as source:
+        image = source.convert("RGBA")
+    flat = Image.new("RGBA", image.size, (255, 255, 255, 255))
+    flat.alpha_composite(image)
+    grey = flat.convert("L")
+    if grey.width != width:
+        height = max(1, round(grey.height * width / grey.width))
+        grey = grey.resize((width, height), Image.LANCZOS)
+    if dither == "dither":
+        return grey.convert("1")
+    return grey.point(lambda value: 255 if value > threshold else 0, mode="1")
+
+
+def header_image(cfg: Config) -> Image.Image | None:
+    if cfg.header_image is None:
+        return None
+    width = min(cfg.print_width,
+                round(cfg.header_image_width_mm * cfg.dots_per_mm))
+    return _header(str(cfg.header_image), cfg.header_image.stat().st_mtime,
+                   width, cfg.header_dither, cfg.header_threshold)
 
 
 @lru_cache(maxsize=16)
@@ -80,6 +107,13 @@ def _blocks(cfg: Config, receipt: Receipt) -> list[tuple[str, object]]:
     body = _font(path, cfg.font_size_body)
 
     items: list[tuple[str, object]] = []
+    picture = header_image(cfg)
+    if picture is not None:
+        items.append(("image", picture))
+    if cfg.header_text:
+        items.append(("text_block", (cfg.header_text, _font(path, cfg.font_size_small))))
+    if picture is not None or cfg.header_text:
+        items.append(("rule", None))
     items.append(("text_block", (receipt.procedure_title, title)))
     items.append(("rule", None))
     items.append(("text_block", (receipt.date_str, body)))
@@ -107,6 +141,11 @@ def _render_content(cfg: Config, receipt: Receipt) -> Image.Image:
             height += GAP_BEFORE_RULE + RULE_THICKNESS + GAP_AFTER_RULE
             laid_out.append(("rule", None))
             continue
+        if kind == "image":
+            picture: Image.Image = payload  # type: ignore[assignment]
+            height += picture.height + GAP_AFTER_IMAGE
+            laid_out.append(("image", picture))
+            continue
         text, font = payload  # type: ignore[misc]
         for line in _wrap(probe, text, font, max_text_width):
             height += _line_height(font)
@@ -119,6 +158,11 @@ def _render_content(cfg: Config, receipt: Receipt) -> Image.Image:
     centre = width // 2
     y = MARGIN_TOP
     for kind, payload in laid_out:
+        if kind == "image":
+            picture = payload
+            canvas.paste(picture.convert("L"), (centre - picture.width // 2, y))
+            y += picture.height + GAP_AFTER_IMAGE
+            continue
         if kind == "rule":
             y += GAP_BEFORE_RULE
             half = int(width * RULE_WIDTH_RATIO / 2)
@@ -138,8 +182,9 @@ def _render_content(cfg: Config, receipt: Receipt) -> Image.Image:
 def render_receipt(cfg: Config, receipt: Receipt) -> Image.Image:
     """Готове ч/б зображення листка.
 
-    При заданому PAPER_LENGTH_MM вміст центрується на полотні фіксованого
-    розміру, інакше висота полотна дорівнює висоті тексту.
+    При заданому PAPER_LENGTH_MM вміст лягає на полотно фіксованого розміру
+    (зверху або по центру — CONTENT_ALIGN), інакше висота полотна
+    дорівнює висоті тексту.
     """
     content = _render_content(cfg, receipt)
 
@@ -156,7 +201,10 @@ def render_receipt(cfg: Config, receipt: Receipt) -> Image.Image:
             height = content.height
         sheet = Image.new("L", (cfg.print_width, height), 255)
         offset = round(cfg.content_offset_mm * cfg.dots_per_mm)
-        top = (height - content.height) // 2 + offset
+        if cfg.content_align == "top":
+            top = round(cfg.content_top_mm * cfg.dots_per_mm) + offset
+        else:
+            top = (height - content.height) // 2 + offset
         top = max(0, min(top, height - content.height))
         sheet.paste(content, (0, top))
 
