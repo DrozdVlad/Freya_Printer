@@ -4,10 +4,12 @@ from __future__ import annotations
 import io
 import logging
 import re
+import time
 from datetime import datetime
 
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
-from telegram.constants import ChatAction, ParseMode
+from telegram.constants import ChatAction, ChatMemberStatus, ParseMode
+from telegram.error import TelegramError
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -34,6 +36,14 @@ KEY_COPIES = "copies"
 KEY_SHEET = "sheet"
 
 PREVIEW_NAMES = 15
+
+ACTIVE_MEMBER_STATUSES = frozenset({
+    ChatMemberStatus.OWNER,
+    ChatMemberStatus.ADMINISTRATOR,
+    ChatMemberStatus.MEMBER,
+})
+ACCESS_TTL = 300.0
+ACCESS_DENY_TTL = 60.0
 
 
 # Клавіатури
@@ -66,9 +76,40 @@ def cfg_of(context: ContextTypes.DEFAULT_TYPE) -> Config:
     return context.application.bot_data["cfg"]
 
 
-def allowed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+async def allowed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Доступ мають учасники дозволеного чату та явно вказані id."""
     user = update.effective_user
-    return bool(user) and cfg_of(context).is_allowed(user.id)
+    if user is None:
+        return False
+    cfg = cfg_of(context)
+    if not cfg.restricted:
+        return True
+    if user.id in cfg.allowed_user_ids:
+        return True
+    if not cfg.allowed_chat_id:
+        return False
+
+    cache: dict[int, tuple[bool, float]] = context.application.bot_data.setdefault(
+        "access_cache", {}
+    )
+    now = time.monotonic()
+    cached = cache.get(user.id)
+    if cached and cached[1] > now:
+        return cached[0]
+
+    try:
+        member = await context.bot.get_chat_member(cfg.allowed_chat_id, user.id)
+        if member.status == ChatMemberStatus.RESTRICTED:
+            ok = bool(getattr(member, "is_member", False))
+        else:
+            ok = member.status in ACTIVE_MEMBER_STATUSES
+    except TelegramError as exc:
+        log.warning("Перевірка чату %s для %s не вдалася: %s",
+                    cfg.allowed_chat_id, user.id, exc)
+        ok = False
+
+    cache[user.id] = (ok, now + (ACCESS_TTL if ok else ACCESS_DENY_TTL))
+    return ok
 
 
 def build_receipt(context: ContextTypes.DEFAULT_TYPE) -> Receipt:
@@ -121,7 +162,7 @@ async def send_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 # Кроки діалогу
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not allowed(update, context):
+    if not await allowed(update, context):
         await update.message.reply_text(T.NOT_ALLOWED,
                                         reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
@@ -247,13 +288,13 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 # Команди
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not allowed(update, context):
+    if not await allowed(update, context):
         return
     await update.message.reply_text(T.HELP, parse_mode=ParseMode.MARKDOWN)
 
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not allowed(update, context):
+    if not await allowed(update, context):
         return
     cfg = cfg_of(context)
     try:
@@ -274,8 +315,17 @@ async def whoami_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                                     parse_mode=ParseMode.MARKDOWN)
 
 
+async def chatid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показує id чату — потрібне для налаштування ALLOWED_CHAT_ID."""
+    chat = update.effective_chat
+    await update.message.reply_text(
+        f"id цього чату: `{chat.id}`\nтип: {chat.type}",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+
 async def fallback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not allowed(update, context):
+    if not await allowed(update, context):
         await update.message.reply_text(T.NOT_ALLOWED)
         return
     await update.message.reply_text(T.UNKNOWN)
@@ -289,8 +339,7 @@ async def post_init(application: Application) -> None:
     cfg: Config = application.bot_data["cfg"]
     log.info("Принтер: %s", cfg.describe_printer())
     log.info("Листок: %s", cfg.paper_size)
-    log.info("Доступ: %s", ", ".join(map(str, sorted(cfg.allowed_user_ids)))
-             if cfg.restricted else "усім (ALLOWED_USER_IDS порожній)")
+    log.info("Доступ: %s", cfg.describe_access())
 
 
 def build_application(cfg: Config) -> Application:
@@ -302,7 +351,8 @@ def build_application(cfg: Config) -> Application:
     )
     application.bot_data["cfg"] = cfg
 
-    text = filters.TEXT & ~filters.COMMAND
+    private = filters.ChatType.PRIVATE
+    text = filters.TEXT & ~filters.COMMAND & private
     # «Скасувати» має ловитися на будь-якому кроці, тому йде першою
     cancel_button = MessageHandler(
         filters.Regex(f"^{re.escape(T.BTN_CANCEL)}$"), cancel
@@ -312,7 +362,7 @@ def build_application(cfg: Config) -> Application:
         return [cancel_button, MessageHandler(text, handler)]
 
     conversation = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
+        entry_points=[CommandHandler("start", start, filters=private)],
         states={
             CHOOSING_TYPE: state(choose_type),
             ENTER_DATETIME: state(enter_datetime),
@@ -322,8 +372,8 @@ def build_application(cfg: Config) -> Application:
             CONFIRM: state(confirm),
         },
         fallbacks=[
-            CommandHandler("cancel", cancel),
-            CommandHandler("start", start),
+            CommandHandler("cancel", cancel, filters=private),
+            CommandHandler("start", start, filters=private),
             cancel_button,
         ],
         allow_reentry=True,
@@ -333,7 +383,8 @@ def build_application(cfg: Config) -> Application:
     application.add_handler(CommandHandler("help", help_cmd))
     application.add_handler(CommandHandler("status", status_cmd))
     application.add_handler(CommandHandler("whoami", whoami_cmd))
-    application.add_handler(MessageHandler(filters.ALL, fallback))
+    application.add_handler(CommandHandler("chatid", chatid_cmd))
+    application.add_handler(MessageHandler(filters.ALL & private, fallback))
     application.add_error_handler(on_error)
     return application
 

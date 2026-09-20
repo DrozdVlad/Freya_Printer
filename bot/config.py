@@ -61,6 +61,7 @@ class Config:
     # Telegram
     bot_token: str
     allowed_user_ids: frozenset[int]
+    allowed_chat_id: int
 
     # Принтер
     backend: str
@@ -103,10 +104,15 @@ class Config:
 
     @property
     def restricted(self) -> bool:
-        return bool(self.allowed_user_ids)
+        return bool(self.allowed_user_ids or self.allowed_chat_id)
 
-    def is_allowed(self, user_id: int) -> bool:
-        return (not self.restricted) or user_id in self.allowed_user_ids
+    def describe_access(self) -> str:
+        parts = []
+        if self.allowed_chat_id:
+            parts.append(f"учасники чату {self.allowed_chat_id}")
+        if self.allowed_user_ids:
+            parts.append("id " + ", ".join(map(str, sorted(self.allowed_user_ids))))
+        return " + ".join(parts) if parts else "усім (доступ не обмежено)" 
 
     @property
     def max_print_length(self) -> int:
@@ -156,6 +162,7 @@ def load_config() -> Config:
     cfg = Config(
         bot_token=_str("BOT_TOKEN"),
         allowed_user_ids=_ids("ALLOWED_USER_IDS"),
+        allowed_chat_id=_int("ALLOWED_CHAT_ID", 0),
         backend=_str("PRINTER_BACKEND", "network").lower(),
         host=_str("PRINTER_HOST", "192.168.100.210"),
         port=_int("PRINTER_PORT", 9100),
