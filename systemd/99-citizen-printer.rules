@@ -1,0 +1,5 @@
+# USB-доступ до принтера Citizen без root.
+# Перевірте VID:PID командою `lsusb` і за потреби виправте idVendor/idProduct.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1cb0", MODE="0664", GROUP="lp"
+SUBSYSTEM=="usbmisc", ATTRS{idVendor}=="1cb0", MODE="0664", GROUP="lp"
+KERNEL=="lp[0-9]*", SUBSYSTEM=="usbmisc", MODE="0664", GROUP="lp"
