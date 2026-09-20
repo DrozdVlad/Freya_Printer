@@ -44,6 +44,13 @@ def _opt_hex_int(name: str) -> int | None:
     return int(raw, 0) if raw else None
 
 
+def _usernames(name: str) -> frozenset[str]:
+    raw = _str(name).replace(";", ",")
+    return frozenset(
+        part.strip().lstrip("@").lower() for part in raw.split(",") if part.strip()
+    )
+
+
 def _resolve(raw: str) -> Path:
     path = Path(raw)
     return path if path.is_absolute() else BASE_DIR / path
@@ -62,6 +69,8 @@ class Config:
     bot_token: str
     allowed_user_ids: frozenset[int]
     allowed_chat_id: int
+    allowed_usernames: frozenset[str]
+    state_file: Path
 
     # Принтер
     backend: str
@@ -104,12 +113,15 @@ class Config:
 
     @property
     def restricted(self) -> bool:
-        return bool(self.allowed_user_ids or self.allowed_chat_id)
+        return bool(self.allowed_user_ids or self.allowed_chat_id
+                    or self.allowed_usernames)
 
     def describe_access(self) -> str:
         parts = []
         if self.allowed_chat_id:
             parts.append(f"учасники чату {self.allowed_chat_id}")
+        if self.allowed_usernames:
+            parts.append("@" + ", @".join(sorted(self.allowed_usernames)))
         if self.allowed_user_ids:
             parts.append("id " + ", ".join(map(str, sorted(self.allowed_user_ids))))
         return " + ".join(parts) if parts else "усім (доступ не обмежено)" 
@@ -163,6 +175,8 @@ def load_config() -> Config:
         bot_token=_str("BOT_TOKEN"),
         allowed_user_ids=_ids("ALLOWED_USER_IDS"),
         allowed_chat_id=_int("ALLOWED_CHAT_ID", 0),
+        allowed_usernames=_usernames("ALLOWED_USERNAMES"),
+        state_file=_resolve(_str("STATE_FILE", "state.json")),
         backend=_str("PRINTER_BACKEND", "network").lower(),
         host=_str("PRINTER_HOST", "192.168.100.210"),
         port=_int("PRINTER_PORT", 9100),

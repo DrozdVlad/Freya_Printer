@@ -8,10 +8,16 @@ import time
 from datetime import datetime
 
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
-from telegram.constants import ChatAction, ChatMemberStatus, ParseMode
+from telegram.constants import (
+    ChatAction,
+    ChatMemberStatus,
+    ChatType,
+    ParseMode,
+)
 from telegram.error import TelegramError
 from telegram.ext import (
     Application,
+    ChatMemberHandler,
     CommandHandler,
     ContextTypes,
     ConversationHandler,
@@ -24,6 +30,7 @@ from .config import Config, load_config
 from .dt import now_in, parse_datetime
 from .printing import PrinterError, check_printer, print_image
 from .render import Receipt, preview_frame, render_receipt
+from .state import State
 
 log = logging.getLogger("printer-bot")
 
@@ -76,17 +83,34 @@ def cfg_of(context: ContextTypes.DEFAULT_TYPE) -> Config:
     return context.application.bot_data["cfg"]
 
 
-async def allowed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Доступ мають учасники дозволеного чату та явно вказані id."""
-    user = update.effective_user
+def state_of(context: ContextTypes.DEFAULT_TYPE) -> State:
+    return context.application.bot_data["state"]
+
+
+def bound_chat(context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Чат, за яким перевіряємо доступ: із .env або запамʼятований ботом."""
+    cfg = cfg_of(context)
+    if cfg.allowed_chat_id:
+        return cfg.allowed_chat_id
+    try:
+        return int(state_of(context).get("chat_id") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+async def user_allowed(user, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Пускаємо за списком id, за @username або за участю в чаті."""
     if user is None:
         return False
     cfg = cfg_of(context)
-    if not cfg.restricted:
+    chat_id = bound_chat(context)
+    if not (cfg.restricted or chat_id):
         return True
     if user.id in cfg.allowed_user_ids:
         return True
-    if not cfg.allowed_chat_id:
+    if user.username and user.username.lower() in cfg.allowed_usernames:
+        return True
+    if not chat_id:
         return False
 
     cache: dict[int, tuple[bool, float]] = context.application.bot_data.setdefault(
@@ -98,18 +122,21 @@ async def allowed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         return cached[0]
 
     try:
-        member = await context.bot.get_chat_member(cfg.allowed_chat_id, user.id)
+        member = await context.bot.get_chat_member(chat_id, user.id)
         if member.status == ChatMemberStatus.RESTRICTED:
             ok = bool(getattr(member, "is_member", False))
         else:
             ok = member.status in ACTIVE_MEMBER_STATUSES
     except TelegramError as exc:
-        log.warning("Перевірка чату %s для %s не вдалася: %s",
-                    cfg.allowed_chat_id, user.id, exc)
+        log.warning("Перевірка чату %s для %s не вдалася: %s", chat_id, user.id, exc)
         ok = False
 
     cache[user.id] = (ok, now + (ACCESS_TTL if ok else ACCESS_DENY_TTL))
     return ok
+
+
+async def allowed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    return await user_allowed(update.effective_user, context)
 
 
 def build_receipt(context: ContextTypes.DEFAULT_TYPE) -> Receipt:
@@ -329,6 +356,36 @@ async def chatid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     )
 
 
+async def on_bot_membership(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Бота додали в групу — запамʼятовуємо її як чат доступу."""
+    event = update.my_chat_member
+    chat = event.chat
+    if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        return
+
+    cfg, state = cfg_of(context), state_of(context)
+    if event.new_chat_member.status in {ChatMemberStatus.LEFT, ChatMemberStatus.BANNED}:
+        if state.get("chat_id") == chat.id:
+            log.warning("Бота видалено з чату %s — доступ за участю більше не працює",
+                        chat.id)
+        return
+
+    if cfg.allowed_chat_id or state.get("chat_id") == chat.id:
+        return
+    if not await user_allowed(event.from_user, context):
+        log.warning("Бота додав у чат %s користувач %s поза списком — ігноруємо",
+                    chat.id, event.from_user.id)
+        return
+
+    state.set("chat_id", chat.id)
+    log.info("Чат доступу привʼязано: %s (%s)", chat.id, chat.title)
+    await context.bot.send_message(
+        chat.id,
+        "Готово. Друкувати зможуть учасники цього чату.\n"
+        "Пишіть мені в особисті та тисніть /start.",
+    )
+
+
 async def fallback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await allowed(update, context):
         await update.message.reply_text(T.NOT_ALLOWED)
@@ -345,6 +402,9 @@ async def post_init(application: Application) -> None:
     log.info("Принтер: %s", cfg.describe_printer())
     log.info("Листок: %s", cfg.paper_size)
     log.info("Доступ: %s", cfg.describe_access())
+    chat_id = application.bot_data["state"].get("chat_id")
+    if chat_id and not cfg.allowed_chat_id:
+        log.info("Запамʼятований чат доступу: %s", chat_id)
 
 
 def build_application(cfg: Config) -> Application:
@@ -355,6 +415,7 @@ def build_application(cfg: Config) -> Application:
         .build()
     )
     application.bot_data["cfg"] = cfg
+    application.bot_data["state"] = State(cfg.state_file)
 
     private = filters.ChatType.PRIVATE
     text = filters.TEXT & ~filters.COMMAND & private
@@ -389,6 +450,9 @@ def build_application(cfg: Config) -> Application:
     application.add_handler(CommandHandler("status", status_cmd))
     application.add_handler(CommandHandler("whoami", whoami_cmd))
     application.add_handler(CommandHandler("chatid", chatid_cmd))
+    application.add_handler(
+        ChatMemberHandler(on_bot_membership, ChatMemberHandler.MY_CHAT_MEMBER)
+    )
     application.add_handler(MessageHandler(filters.ALL & private, fallback))
     application.add_error_handler(on_error)
     return application

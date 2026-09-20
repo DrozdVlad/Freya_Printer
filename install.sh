@@ -30,7 +30,7 @@ echo "==> Копіювання в $APP_DIR"
 mkdir -p "$APP_DIR"
 rsync -a --delete \
   --exclude '.venv/' --exclude '__pycache__/' --exclude '.git/' \
-  --exclude 'out/' --exclude '.env' \
+  --exclude 'out/' --exclude '.env' --exclude 'state.json' \
   "$SRC_DIR"/ "$APP_DIR"/
 
 echo "==> Віртуальне оточення"
