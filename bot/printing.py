@@ -13,7 +13,7 @@ from .config import Config
 
 log = logging.getLogger(__name__)
 
-# Один друк за раз — щоб паралельні запити не змішали байти в одному сокеті.
+# один друк за раз: паралельні запити змішали б байти в сокеті
 _print_lock = asyncio.Lock()
 
 
@@ -32,8 +32,7 @@ def _profile(width_pixels: int, width_mm: int):
         "width": {"pixels": width_pixels, "mm": width_mm},
     }
     klass = type("CitizenCTE351Profile", (Profile,), {"profile_data": data})
-    # Profile.__init__ обнуляє features, тому передаємо їх явно —
-    # інакше escpos вважає, що принтер не вміє різати папір.
+    # Profile.__init__ обнуляє features, без них escpos не ріже папір
     return klass(features=data["features"])
 
 
@@ -74,10 +73,10 @@ def _build_printer(cfg: Config):
 
 
 def _encode_copy(cfg: Config, image: Image.Image) -> bytes:
-    """Кодує одну копію в ESC/POS один раз.
+    """Кодує одну копію в ESC/POS.
 
-    Растр важить ~80 КБ, тож для N копій кодуємо його один раз
-    і просто повторюємо готовий блок байтів.
+    Растр важить ~80 КБ, тож для партії копій кодуємо його один раз
+    і повторюємо готовий блок байтів.
     """
     from escpos.printer import Dummy
 
@@ -85,8 +84,7 @@ def _encode_copy(cfg: Config, image: Image.Image) -> bytes:
     job.hw("INIT")
     job.image(image, impl="bitImageRaster", center=False)
     if cfg.print_length > 0:
-        # Полотно вже потрібної довжини: одразу подача до ножа і відріз
-        # (GS V 66 0), щоб листок вийшов рівно заданого розміру.
+        # полотно вже потрібної довжини: GS V 66 0 подає до ножа і ріже
         if cfg.cut_paper:
             job.cut(feed=False)
     else:

@@ -34,7 +34,7 @@ KEY_COPIES = "copies"
 KEY_SHEET = "sheet"
 
 
-# ── Клавіатури ──────────────────────────────────────────────────────────────
+# Клавіатури
 def kb(rows: list[list[str]]) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(rows, resize_keyboard=True, one_time_keyboard=False)
 
@@ -59,7 +59,7 @@ def kb_confirm() -> ReplyKeyboardMarkup:
     return kb([[T.BTN_PRINT], [T.BTN_CANCEL]])
 
 
-# ── Допоміжне ───────────────────────────────────────────────────────────────
+# Допоміжне
 def cfg_of(context: ContextTypes.DEFAULT_TYPE) -> Config:
     return context.application.bot_data["cfg"]
 
@@ -94,7 +94,6 @@ def summary(context: ContextTypes.DEFAULT_TYPE) -> str:
 
 async def send_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cfg = cfg_of(context)
-    # Рендеримо листок один раз: та сама картинка піде і в прев'ю, і на друк.
     sheet = render_receipt(cfg, build_receipt(context))
     context.user_data[KEY_SHEET] = sheet
     image = preview_frame(sheet)
@@ -110,7 +109,7 @@ async def send_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 
-# ── Кроки діалогу ───────────────────────────────────────────────────────────
+# Кроки діалогу
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not allowed(update, context):
         await update.message.reply_text(T.NOT_ALLOWED,
@@ -234,7 +233,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 
-# ── Прості команди ──────────────────────────────────────────────────────────
+# Команди
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not allowed(update, context):
         return
@@ -292,8 +291,7 @@ def build_application(cfg: Config) -> Application:
     application.bot_data["cfg"] = cfg
 
     text = filters.TEXT & ~filters.COMMAND
-    # Кнопка «Скасувати» має спрацьовувати на будь-якому кроці,
-    # тому ставимо її перед основним обробником кожного стану.
+    # «Скасувати» має ловитися на будь-якому кроці, тому йде першою
     cancel_button = MessageHandler(
         filters.Regex(f"^{re.escape(T.BTN_CANCEL)}$"), cancel
     )

@@ -110,14 +110,13 @@ class Config:
 
 
 def load_config() -> Config:
-    # Геометрія паперу. 203 dpi = рівно 8 точок на міліметр.
+    # 203 dpi = 8 точок на міліметр
     dots_per_mm = _int("DOTS_PER_MM", 8)
     paper_width_mm = _float("PAPER_WIDTH_MM", 72.0)
     paper_length_mm = _float("PAPER_LENGTH_MM", 148.0)
 
-    # Ширину можна задати явно в точках, інакше рахуємо з міліметрів.
     print_width = _int("PRINT_WIDTH", 0) or round(paper_width_mm * dots_per_mm)
-    # Довжина 0 => стрічка рветься по вмісту (старий режим).
+    # 0 => довжина листка по вмісту
     print_length = round(paper_length_mm * dots_per_mm) if paper_length_mm > 0 else 0
 
     font_path = Path(_str("FONT_PATH", "fonts/Lora-Regular.ttf"))

@@ -1,7 +1,6 @@
 """Рендер записки в монохромне зображення для термопринтера.
 
-Друкуємо саме картинкою, а не вбудованим шрифтом принтера, бо ТЗ вимагає
-шрифт Lora Regular. Кожен рядок вирівняно строго по центру.
+Друкуємо картинкою, а не вбудованим шрифтом принтера, бо потрібен Lora.
 """
 from __future__ import annotations
 
@@ -100,7 +99,7 @@ def _render_content(cfg: Config, receipt: Receipt) -> Image.Image:
     probe = ImageDraw.Draw(Image.new("L", (width, 10), 255))
     items = _blocks(cfg, receipt)
 
-    # 1-й прохід: рахуємо висоту
+    # рахуємо висоту
     laid_out: list[tuple[str, object]] = []
     height = MARGIN_TOP
     for kind, payload in items:
@@ -114,7 +113,7 @@ def _render_content(cfg: Config, receipt: Receipt) -> Image.Image:
             laid_out.append(("line", (line, font)))
     height += MARGIN_BOTTOM
 
-    # 2-й прохід: малюємо
+    # малюємо
     canvas = Image.new("L", (width, height), 255)
     draw = ImageDraw.Draw(canvas)
     centre = width // 2
@@ -139,9 +138,8 @@ def _render_content(cfg: Config, receipt: Receipt) -> Image.Image:
 def render_receipt(cfg: Config, receipt: Receipt) -> Image.Image:
     """Готове ч/б зображення листка.
 
-    Якщо задано PAPER_LENGTH_MM, вміст розміщується по центру полотна
-    фіксованого розміру (за ТЗ — 70×148 мм), і принтер відрізає рівно
-    такий листок. Якщо довжина 0 — полотно по висоті тексту.
+    При заданому PAPER_LENGTH_MM вміст центрується на полотні фіксованого
+    розміру, інакше висота полотна дорівнює висоті тексту.
     """
     content = _render_content(cfg, receipt)
 
@@ -162,7 +160,7 @@ def render_receipt(cfg: Config, receipt: Receipt) -> Image.Image:
         top = max(0, min(top, height - content.height))
         sheet.paste(content, (0, top))
 
-    # Поріг без дизерингу, одразу в 1 біт — текст на чеку виходить чітким
+    # поріг без дизерингу: текст на чеку має бути чітким
     return sheet.point(lambda value: 255 if value > 150 else 0, mode="1")
 
 
@@ -174,7 +172,6 @@ def preview_frame(sheet: Image.Image) -> Image.Image:
         "L", (receipt_img.width + 2 * pad, receipt_img.height + 2 * pad), 210
     )
     canvas.paste(receipt_img, (pad, pad))
-    # Рамка = межі листка, щоб було видно реальні поля
     ImageDraw.Draw(canvas).rectangle(
         [pad - 1, pad - 1, pad + receipt_img.width, pad + receipt_img.height],
         outline=120, width=1,
