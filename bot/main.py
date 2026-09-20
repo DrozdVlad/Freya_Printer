@@ -311,8 +311,13 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 async def whoami_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
-    await update.message.reply_text(f"Ваш Telegram id: `{user.id}`",
-                                    parse_mode=ParseMode.MARKDOWN)
+    who = user.full_name
+    if user.username:
+        who += f" (@{user.username})"
+    await update.message.reply_text(
+        f"{who}\nTelegram id: `{user.id}`",
+        parse_mode=ParseMode.MARKDOWN,
+    )
 
 
 async def chatid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
