@@ -33,6 +33,8 @@ KEY_NAMES = "names"
 KEY_COPIES = "copies"
 KEY_SHEET = "sheet"
 
+PREVIEW_NAMES = 15
+
 
 # Клавіатури
 def kb(rows: list[list[str]]) -> ReplyKeyboardMarkup:
@@ -77,18 +79,26 @@ def build_receipt(context: ContextTypes.DEFAULT_TYPE) -> Receipt:
                    names=list(data.get(KEY_NAMES, [])))
 
 
-def summary(context: ContextTypes.DEFAULT_TYPE) -> str:
+def summary(context: ContextTypes.DEFAULT_TYPE, sheet_height: int,
+            cfg: Config) -> str:
     data = context.user_data
     procedure = T.PROCEDURE_BY_KEY[data[KEY_PROCEDURE]]
     when: datetime = data[KEY_WHEN]
-    names = "\n".join(f"  • {n}" for n in data.get(KEY_NAMES, []))
+    listed = data.get(KEY_NAMES, [])
+    # підпис до фото в Telegram обмежений 1024 символами
+    shown = listed[:PREVIEW_NAMES]
+    names = "\n".join(f"  • {n}" for n in shown)
+    if len(listed) > PREVIEW_NAMES:
+        names += f"\n  … і ще {len(listed) - PREVIEW_NAMES}"
     return (
         f"*Перевірте перед друком*\n\n"
         f"Тип: {procedure.button}\n"
         f"Дата: {when.strftime('%d.%m.%Y')}\n"
         f"Час: {when.strftime('%H:%M')}\n"
         f"Імена:\n{names}\n"
-        f"Копій: {data[KEY_COPIES]}"
+        f"Копій: {data[KEY_COPIES]}\n"
+        f"Листок: {cfg.print_width // cfg.dots_per_mm}×"
+        f"{sheet_height // cfg.dots_per_mm} мм"
     )
 
 
@@ -103,7 +113,7 @@ async def send_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.chat.send_action(ChatAction.UPLOAD_PHOTO)
     await update.message.reply_photo(
         photo=buffer,
-        caption=summary(context),
+        caption=summary(context, sheet.height, cfg),
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=kb_confirm(),
     )
@@ -156,11 +166,13 @@ async def enter_datetime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def enter_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    name = " ".join(update.message.text.strip().split())
-    if len(name) < 2:
+    # можна надіслати одразу список — по імені в рядку
+    added = [" ".join(line.split()) for line in update.message.text.splitlines()]
+    added = [name for name in added if len(name) >= 2]
+    if not added:
         await update.message.reply_text(T.BAD_NAME)
         return ENTER_NAME
-    context.user_data.setdefault(KEY_NAMES, []).append(name)
+    context.user_data.setdefault(KEY_NAMES, []).extend(added)
     listed = "\n".join(f"{i}. {n}" for i, n in
                        enumerate(context.user_data[KEY_NAMES], start=1))
     await update.message.reply_text(f"Додано:\n{listed}\n\n{T.ASK_MORE}",
