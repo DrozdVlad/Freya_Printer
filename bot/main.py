@@ -5,7 +5,7 @@ import io
 import logging
 import re
 import time
-from datetime import datetime
+from datetime import date
 
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
 from telegram.constants import (
@@ -27,20 +27,20 @@ from telegram.ext import (
 
 from . import texts as T
 from .config import Config, load_config
-from .dt import now_in, parse_datetime
+from .dt import now_in, parse_date
 from .printing import PrinterError, check_printer, print_image
-from .render import Receipt, preview_frame, render_receipt
+from .render import Receipt, preview_frame, render_pages
 from .state import State
 
 log = logging.getLogger("printer-bot")
 
-CHOOSING_TYPE, ENTER_DATETIME, ENTER_NAME, ASK_MORE, ENTER_COPIES, CONFIRM = range(6)
+CHOOSING_TYPE, ENTER_DATE, ENTER_NAME, ASK_MORE, ENTER_COPIES, CONFIRM = range(6)
 
 KEY_PROCEDURE = "procedure_key"
 KEY_WHEN = "when"
 KEY_NAMES = "names"
 KEY_COPIES = "copies"
-KEY_SHEET = "sheet"
+KEY_SHEETS = "sheets"
 
 PREVIEW_NAMES = 15
 
@@ -65,8 +65,8 @@ def kb_types() -> ReplyKeyboardMarkup:
     return kb([[p.button] for p in T.PROCEDURES])
 
 
-def kb_datetime() -> ReplyKeyboardMarkup:
-    return kb([[T.BTN_NOW], [T.BTN_CANCEL]])
+def kb_date() -> ReplyKeyboardMarkup:
+    return kb([[T.BTN_CANCEL]])
 
 
 def kb_more() -> ReplyKeyboardMarkup:
@@ -146,16 +146,17 @@ async def allowed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
 def build_receipt(context: ContextTypes.DEFAULT_TYPE) -> Receipt:
     data = context.user_data
     procedure = T.PROCEDURE_BY_KEY[data[KEY_PROCEDURE]]
-    when: datetime = data[KEY_WHEN]
+    when: date = data[KEY_WHEN]
     return Receipt(procedure_title=procedure.title, when=when,
-                   names=list(data.get(KEY_NAMES, [])))
+                   names=list(data.get(KEY_NAMES, [])),
+                   printed_at=now_in(cfg_of(context).timezone).replace(tzinfo=None))
 
 
-def summary(context: ContextTypes.DEFAULT_TYPE, sheet_height: int,
+def summary(context: ContextTypes.DEFAULT_TYPE, sheets: list,
             cfg: Config) -> str:
     data = context.user_data
     procedure = T.PROCEDURE_BY_KEY[data[KEY_PROCEDURE]]
-    when: datetime = data[KEY_WHEN]
+    when: date = data[KEY_WHEN]
     listed = data.get(KEY_NAMES, [])
     # підпис до фото в Telegram обмежений 1024 символами
     shown = listed[:PREVIEW_NAMES]
@@ -165,27 +166,27 @@ def summary(context: ContextTypes.DEFAULT_TYPE, sheet_height: int,
     return (
         f"*Перевірте перед друком*\n\n"
         f"Тип: {procedure.button}\n"
-        f"Дата: {when.strftime('%d.%m.%Y')}\n"
-        f"Час: {when.strftime('%H:%M')}\n"
+        f"Дата звершення: {when.strftime('%d.%m.%Y')}\n"
         f"Імена:\n{names}\n"
         f"Копій: {data[KEY_COPIES]}\n"
+        f"Аркушів у копії: {len(sheets)}\n"
         f"Листок: {cfg.print_width // cfg.dots_per_mm}×"
-        f"{sheet_height // cfg.dots_per_mm} мм"
+        f"{sheets[0].height // cfg.dots_per_mm} мм"
     )
 
 
 async def send_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cfg = cfg_of(context)
-    sheet = render_receipt(cfg, build_receipt(context))
-    context.user_data[KEY_SHEET] = sheet
-    image = preview_frame(sheet)
+    sheets = render_pages(cfg, build_receipt(context))
+    context.user_data[KEY_SHEETS] = sheets
+    image = preview_frame(sheets)
     buffer = io.BytesIO()
     image.convert("RGB").save(buffer, format="PNG")
     buffer.seek(0)
     await update.message.chat.send_action(ChatAction.UPLOAD_PHOTO)
     await update.message.reply_photo(
         photo=buffer,
-        caption=summary(context, sheet.height, cfg),
+        caption=summary(context, sheets, cfg),
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=kb_confirm(),
     )
@@ -208,28 +209,23 @@ async def choose_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         await update.message.reply_text(T.ASK_TYPE, reply_markup=kb_types())
         return CHOOSING_TYPE
     context.user_data[KEY_PROCEDURE] = procedure.key
-    await update.message.reply_text(T.ASK_DATETIME,
+    await update.message.reply_text(T.ASK_DATE,
                                     parse_mode=ParseMode.MARKDOWN,
-                                    reply_markup=kb_datetime())
-    return ENTER_DATETIME
+                                    reply_markup=kb_date())
+    return ENTER_DATE
 
 
-async def enter_datetime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    cfg = cfg_of(context)
-    raw = update.message.text.strip()
-    if raw == T.BTN_NOW:
-        when = now_in(cfg.timezone).replace(tzinfo=None)
-    else:
-        when = parse_datetime(raw, cfg.timezone)
+async def enter_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    when = parse_date(update.message.text)
     if when is None:
-        await update.message.reply_text(T.BAD_DATETIME,
+        await update.message.reply_text(T.BAD_DATE,
                                         parse_mode=ParseMode.MARKDOWN,
-                                        reply_markup=kb_datetime())
-        return ENTER_DATETIME
+                                        reply_markup=kb_date())
+        return ENTER_DATE
     context.user_data[KEY_WHEN] = when
     context.user_data[KEY_NAMES] = []
     await update.message.reply_text(
-        f"Дата й час: *{when.strftime('%d.%m.%Y %H:%M')}*",
+        f"Дата звершення: *{when.strftime('%d.%m.%Y')}*",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=ReplyKeyboardRemove(),
     )
@@ -293,9 +289,9 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     copies = context.user_data[KEY_COPIES]
     notice = await update.message.reply_text(T.PRINTING,
                                              reply_markup=ReplyKeyboardRemove())
-    sheet = context.user_data.get(KEY_SHEET) or render_receipt(cfg, build_receipt(context))
+    sheets = context.user_data.get(KEY_SHEETS) or render_pages(cfg, build_receipt(context))
     try:
-        await print_image(cfg, sheet, copies)
+        await print_image(cfg, sheets, copies)
     except PrinterError as exc:
         log.exception("Друк не вдався")
         await notice.edit_text(
@@ -437,7 +433,7 @@ def build_application(cfg: Config) -> Application:
         entry_points=[CommandHandler("start", start, filters=private)],
         states={
             CHOOSING_TYPE: state(choose_type),
-            ENTER_DATETIME: state(enter_datetime),
+            ENTER_DATE: state(enter_date),
             ENTER_NAME: state(enter_name),
             ASK_MORE: state(ask_more),
             ENTER_COPIES: state(enter_copies),

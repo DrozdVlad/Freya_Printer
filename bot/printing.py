@@ -94,14 +94,16 @@ def _encode_copy(cfg: Config, image: Image.Image) -> bytes:
     return bytes(job.output)
 
 
-def _print_sync(cfg: Config, image: Image.Image, copies: int) -> None:
-    payload = _encode_copy(cfg, image)
+def _print_sync(cfg: Config, pages: list[Image.Image], copies: int) -> None:
+    # копія — усі аркуші підряд, кожен відрізаний окремо
+    payload = b"".join(_encode_copy(cfg, page) for page in pages)
     device = _build_printer(cfg)
     try:
         device.open()
         for index in range(copies):
             device._raw(payload)
-            log.info("Надруковано копію %s/%s", index + 1, copies)
+            log.info("Надруковано копію %s/%s (аркушів: %s)",
+                     index + 1, copies, len(pages))
     except Exception as exc:  # noqa: BLE001 — показуємо користувачу причину
         raise PrinterError(str(exc)) from exc
     finally:
@@ -111,10 +113,15 @@ def _print_sync(cfg: Config, image: Image.Image, copies: int) -> None:
             log.debug("Помилка при закритті з'єднання з принтером", exc_info=True)
 
 
-async def print_image(cfg: Config, image: Image.Image, copies: int) -> None:
-    """Друкує зображення `copies` разів. Блокуючий ввід/вивід — у потоці."""
+async def print_image(cfg: Config, image: Image.Image | list[Image.Image],
+                      copies: int) -> None:
+    """Друкує копію (один аркуш або кілька) `copies` разів.
+
+    Блокуючий ввід/вивід — у потоці.
+    """
+    pages = [image] if isinstance(image, Image.Image) else list(image)
     async with _print_lock:
-        await asyncio.to_thread(_print_sync, cfg, image, copies)
+        await asyncio.to_thread(_print_sync, cfg, pages, copies)
 
 
 def _check_sync(cfg: Config) -> str:

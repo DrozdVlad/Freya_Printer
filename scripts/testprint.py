@@ -29,7 +29,8 @@ async def main() -> int:
 
     receipt = Receipt(
         procedure_title=PROCEDURES[1].title,
-        when=datetime.now().replace(second=0, microsecond=0),
+        when=datetime.now().date(),
+        printed_at=datetime.now().replace(second=0, microsecond=0),
         names=["Тестове Ім'я", "Друге Ім'я"],
     )
     await print_image(cfg, render_receipt(cfg, receipt), copies)

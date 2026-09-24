@@ -106,9 +106,11 @@ class Config:
     font_size_title: int
     font_size_body: int
     font_size_small: int
+    font_size_tiny: int
     feed_lines: int
     cut_paper: bool
     max_copies: int
+    names_per_sheet: int
     timezone: str
 
     @property
@@ -206,9 +208,11 @@ def load_config() -> Config:
         font_size_title=_int("FONT_SIZE_TITLE", 46),
         font_size_body=_int("FONT_SIZE_BODY", 40),
         font_size_small=_int("FONT_SIZE_SMALL", 32),
+        font_size_tiny=_int("FONT_SIZE_TINY", 22),
         feed_lines=_int("FEED_LINES", 4),
         cut_paper=_bool("CUT_PAPER", True),
         max_copies=_int("MAX_COPIES", 50),
+        names_per_sheet=_int("NAMES_PER_SHEET", 10),
         timezone=_str("TIMEZONE", "Europe/Kyiv"),
     )
 

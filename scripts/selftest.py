@@ -11,7 +11,7 @@ import os
 import socket
 import sys
 import threading
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -54,7 +54,8 @@ def main() -> int:
     cfg = load_config()
     receipt = Receipt(
         procedure_title=PROCEDURES[2].title,
-        when=datetime(2026, 9, 21, 9, 30),
+        when=date(2026, 12, 20),
+        printed_at=datetime.now().replace(second=0, microsecond=0),
         names=["Іван Петренко", "Марія Коваль"],
     )
     image = render_receipt(cfg, receipt)
