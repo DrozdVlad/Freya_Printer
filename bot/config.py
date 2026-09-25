@@ -70,6 +70,7 @@ class Config:
     allowed_user_ids: frozenset[int]
     allowed_chat_id: int
     allowed_usernames: frozenset[str]
+    allowed_chat_title: str
     state_file: Path
 
     # Принтер
@@ -116,12 +117,19 @@ class Config:
     @property
     def restricted(self) -> bool:
         return bool(self.allowed_user_ids or self.allowed_chat_id
-                    or self.allowed_usernames)
+                    or self.allowed_usernames or self.allowed_chat_title)
+
+    def title_matches(self, title: str | None) -> bool:
+        """Чи це той чат, до якого бот має привʼязатися за назвою."""
+        norm = lambda s: " ".join((s or "").split()).casefold()  # noqa: E731
+        return bool(self.allowed_chat_title) and norm(title) == norm(self.allowed_chat_title)
 
     def describe_access(self) -> str:
         parts = []
         if self.allowed_chat_id:
             parts.append(f"учасники чату {self.allowed_chat_id}")
+        elif self.allowed_chat_title:
+            parts.append(f"учасники чату «{self.allowed_chat_title}»")
         if self.allowed_usernames:
             parts.append("@" + ", @".join(sorted(self.allowed_usernames)))
         if self.allowed_user_ids:
@@ -178,6 +186,7 @@ def load_config() -> Config:
         allowed_user_ids=_ids("ALLOWED_USER_IDS"),
         allowed_chat_id=_int("ALLOWED_CHAT_ID", 0),
         allowed_usernames=_usernames("ALLOWED_USERNAMES"),
+        allowed_chat_title=_str("ALLOWED_CHAT_TITLE"),
         state_file=_resolve(_str("STATE_FILE", "state.json")),
         backend=_str("PRINTER_BACKEND", "network").lower(),
         host=_str("PRINTER_HOST", "192.168.100.210"),

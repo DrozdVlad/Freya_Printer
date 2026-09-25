@@ -7,7 +7,13 @@ import re
 import time
 from datetime import date
 
-from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+    Update,
+)
 from telegram.constants import (
     ChatAction,
     ChatMemberStatus,
@@ -22,11 +28,13 @@ from telegram.ext import (
     ContextTypes,
     ConversationHandler,
     MessageHandler,
+    PersistenceInput,
+    PicklePersistence,
     filters,
 )
 
 from . import texts as T
-from .config import Config, load_config
+from .config import BASE_DIR, Config, load_config
 from .dt import now_in, parse_date
 from .printing import PrinterError, check_printer, print_image
 from .render import Receipt, preview_frame, render_pages
@@ -34,7 +42,8 @@ from .state import State
 
 log = logging.getLogger("printer-bot")
 
-CHOOSING_TYPE, ENTER_DATE, ENTER_NAME, ASK_MORE, ENTER_COPIES, CONFIRM = range(6)
+(CHOOSING_TYPE, ENTER_DATE, ENTER_NAME, ASK_MORE, ENTER_COPIES, CONFIRM,
+ ASK_AGAIN) = range(7)
 
 KEY_PROCEDURE = "procedure_key"
 KEY_WHEN = "when"
@@ -79,6 +88,10 @@ def kb_copies() -> ReplyKeyboardMarkup:
 
 def kb_confirm() -> ReplyKeyboardMarkup:
     return kb([[T.BTN_PRINT], [T.BTN_CANCEL]])
+
+
+def kb_again() -> ReplyKeyboardMarkup:
+    return kb([[T.BTN_AGAIN_NEW], [T.BTN_AGAIN_SAME], [T.BTN_AGAIN_NO]])
 
 
 # Допоміжне
@@ -203,6 +216,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return CHOOSING_TYPE
 
 
+async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Текст поза діалогом (напр. кнопка після перезапуску бота) —
+    не «не зрозумів», а одразу вибір процедури."""
+    if not await allowed(update, context):
+        await update.message.reply_text(T.NOT_ALLOWED,
+                                        reply_markup=ReplyKeyboardRemove())
+        return ConversationHandler.END
+    if update.message.text.strip() in T.PROCEDURE_BY_BUTTON:
+        context.user_data.clear()
+        return await choose_type(update, context)
+    return await start(update, context)
+
+
 async def choose_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     procedure = T.PROCEDURE_BY_BUTTON.get(update.message.text.strip())
     if procedure is None:
@@ -287,14 +313,16 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     cfg = cfg_of(context)
     copies = context.user_data[KEY_COPIES]
-    notice = await update.message.reply_text(T.PRINTING,
-                                             reply_markup=ReplyKeyboardRemove())
+    # Повідомлення з ReplyKeyboardRemove Telegram редагувати не дає,
+    # тому результат друку надсилаємо окремим повідомленням.
+    await update.message.reply_text(T.PRINTING, reply_markup=ReplyKeyboardRemove())
     sheets = context.user_data.get(KEY_SHEETS) or render_pages(cfg, build_receipt(context))
     try:
         await print_image(cfg, sheets, copies)
     except PrinterError as exc:
         log.exception("Друк не вдався")
-        await notice.edit_text(
+        context.user_data.clear()
+        await update.message.reply_text(
             f"❌ Не вдалося надрукувати.\n\n`{exc}`\n\n"
             f"Принтер: `{cfg.describe_printer()}`\n"
             f"Натисніть /start, щоб спробувати ще раз.",
@@ -302,9 +330,31 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         return ConversationHandler.END
 
-    await notice.edit_text(f"✅ Готово. Надруковано копій: {copies}.\n/start — нова записка")
-    context.user_data.clear()
-    return ConversationHandler.END
+    # Дані записки лишаємо — вони потрібні для «цю ж ще раз»
+    await update.message.reply_text(
+        f"✅ Готово. Надруковано копій: {copies}.\n\n{T.ASK_AGAIN}",
+        reply_markup=kb_again(),
+    )
+    return ASK_AGAIN
+
+
+async def ask_again(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    choice = update.message.text.strip()
+    if choice == T.BTN_AGAIN_NEW:
+        context.user_data.clear()
+        await update.message.reply_text(T.ASK_TYPE, reply_markup=kb_types())
+        return CHOOSING_TYPE
+    if choice == T.BTN_AGAIN_SAME:
+        # та сама записка, лише заново питаємо кількість копій
+        context.user_data.pop(KEY_COPIES, None)
+        await update.message.reply_text(T.ASK_COPIES, reply_markup=kb_copies())
+        return ENTER_COPIES
+    if choice == T.BTN_AGAIN_NO:
+        context.user_data.clear()
+        await update.message.reply_text(T.FINISHED, reply_markup=ReplyKeyboardRemove())
+        return ConversationHandler.END
+    await update.message.reply_text(T.ASK_AGAIN, reply_markup=kb_again())
+    return ASK_AGAIN
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -374,25 +424,58 @@ async def on_bot_membership(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if cfg.allowed_chat_id or state.get("chat_id") == chat.id:
         return
-    if not await user_allowed(event.from_user, context):
+    if cfg.allowed_chat_title:
+        # чат задано назвою — привʼязуємось лише до нього
+        if not cfg.title_matches(chat.title):
+            log.warning("Бота додали в чат %s (%s) — це не «%s», ігноруємо",
+                        chat.id, chat.title, cfg.allowed_chat_title)
+            return
+    elif not await user_allowed(event.from_user, context):
         log.warning("Бота додав у чат %s користувач %s поза списком — ігноруємо",
                     chat.id, event.from_user.id)
         return
 
+    await bind_chat(chat, context)
+
+
+def kb_private(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
+    url = f"https://t.me/{context.bot.username}?start=note"
+    return InlineKeyboardMarkup([[InlineKeyboardButton(T.BTN_OPEN_PRIVATE, url=url)]])
+
+
+async def bind_chat(chat, context: ContextTypes.DEFAULT_TYPE) -> None:
+    state = state_of(context)
     state.set("chat_id", chat.id)
+    context.application.bot_data.pop("access_cache", None)
     log.info("Чат доступу привʼязано: %s (%s)", chat.id, chat.title)
     await context.bot.send_message(
         chat.id,
-        "Готово. Друкувати зможуть учасники цього чату.\n"
-        "Пишіть мені в особисті та тисніть /start.",
+        "Готово. Друкувати зможуть учасники цього чату.\n" + T.GO_PRIVATE,
+        reply_markup=kb_private(context),
     )
+
+
+async def group_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/start у групі: записки оформлюються в особистих — даємо кнопку туди."""
+    await update.message.reply_text(T.GO_PRIVATE, reply_markup=kb_private(context))
+
+
+async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Бот уже був у чаті до налаштування — привʼязуємось за назвою
+    при першій же команді в ньому (напр. /chatid)."""
+    chat = update.effective_chat
+    cfg, state = cfg_of(context), state_of(context)
+    if (chat is None or state is None or cfg.allowed_chat_id
+            or state.get("chat_id") or not cfg.title_matches(chat.title)):
+        return
+    await bind_chat(chat, context)
 
 
 async def fallback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await allowed(update, context):
         await update.message.reply_text(T.NOT_ALLOWED)
         return
-    await update.message.reply_text(T.UNKNOWN)
+    await update.message.reply_text(T.UNKNOWN, reply_markup=kb_types())
 
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -410,9 +493,17 @@ async def post_init(application: Application) -> None:
 
 
 def build_application(cfg: Config) -> Application:
+    # Діалоги зберігаються на диск, щоб перезапуск бота їх не обривав
+    persistence = PicklePersistence(
+        filepath=BASE_DIR / "conversations.pickle",
+        store_data=PersistenceInput(bot_data=False, chat_data=False,
+                                    callback_data=False),
+        update_interval=5,
+    )
     application = (
         Application.builder()
         .token(cfg.bot_token)
+        .persistence(persistence)
         .post_init(post_init)
         .build()
     )
@@ -430,7 +521,10 @@ def build_application(cfg: Config) -> Application:
         return [cancel_button, MessageHandler(text, handler)]
 
     conversation = ConversationHandler(
-        entry_points=[CommandHandler("start", start, filters=private)],
+        entry_points=[
+            CommandHandler("start", start, filters=private),
+            MessageHandler(text, resume),
+        ],
         states={
             CHOOSING_TYPE: state(choose_type),
             ENTER_DATE: state(enter_date),
@@ -438,16 +532,28 @@ def build_application(cfg: Config) -> Application:
             ASK_MORE: state(ask_more),
             ENTER_COPIES: state(enter_copies),
             CONFIRM: state(confirm),
+            ASK_AGAIN: state(ask_again),
         },
         fallbacks=[
             CommandHandler("cancel", cancel, filters=private),
             CommandHandler("start", start, filters=private),
             cancel_button,
         ],
-        allow_reentry=True,
+        # не True: інакше текстовий вхід перехоплював би кожне повідомлення;
+        # /start посеред діалогу все одно спрацьовує через fallbacks
+        allow_reentry=False,
+        name="note",
+        persistent=True,
     )
 
+    # окрема група обробників: спрацьовує поряд з рештою, нічого не перехоплює
+    application.add_handler(
+        MessageHandler(filters.ChatType.GROUPS, on_group_message), group=-1
+    )
     application.add_handler(conversation)
+    application.add_handler(
+        CommandHandler("start", group_start, filters=filters.ChatType.GROUPS)
+    )
     application.add_handler(CommandHandler("help", help_cmd))
     application.add_handler(CommandHandler("status", status_cmd))
     application.add_handler(CommandHandler("whoami", whoami_cmd))

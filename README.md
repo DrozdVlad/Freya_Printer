@@ -25,6 +25,24 @@ sudo bash install.sh 7123456789:AAH...
 По ходу установщик проверит, отвечает ли принтер, и в конце покажет
 ссылку на бота. После перезагрузки сервера бот поднимется сам.
 
+### Windows
+
+Нужен Python 3.12 ([python.org](https://www.python.org/downloads/)).
+
+```powershell
+git clone https://github.com/DrozdVlad/Freya_Printer.git FreyaPrinterApp
+cd FreyaPrinterApp
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+copy .env.example .env      # или положите свой сохранённый .env
+powershell -ExecutionPolicy Bypass -File autostart\install_autostart.ps1
+```
+
+`start_bot.bat` запускает бота и перезапускает его при падении (лог — в
+`logs\bot.log`). `install_autostart.ps1` кладёт ярлык в автозагрузку, бот
+стартует при входе в Windows. `.env` с токеном в репозиторий не попадает —
+храните его копию отдельно.
+
 ## Как выглядит диалог
 
 ```
@@ -37,12 +55,16 @@ sudo bash install.sh 7123456789:AAH...
   → Сколько копий:  [1] [2] [3] [5] [10] или числом
   → Превью картинки + [🖨 Друкувати] / [✖️ Скасувати]
   → Печать
+  → Друкувати ще? [📝 Так, нова записка] [🔁 Так, цю ж ще раз] [❌ Ні]
 ```
 
 Команды: `/start`, `/cancel`, `/status` (проверка связи с принтером),
 `/whoami` (свой Telegram id), `/chatid` (id чата), `/help`.
 
-В групповых чатах бот молчит — диалог работает только в личке.
+Диалог работает только в личке. На `/start` в группе бот отвечает кнопкой
+перехода в личку. Любое сообщение вне диалога сразу открывает выбор типа
+процедуры. Шаг диалога хранится в `conversations.pickle`, поэтому
+перезапуск бота разговор не обрывает.
 
 ## Кто может печатать
 
