@@ -21,14 +21,29 @@ PROCEDURES: tuple[Procedure, ...] = (
         title="ЗА УПОКІЙ\nнедільна планова літургія",
     ),
     Procedure(
-        key="ordered_liturgy",
-        button="Замовна літургія",
-        title="ЗА УПОКІЙ\nзамовна літургія",
+        key="sorokoust",
+        button="Сорокоуст",
+        title="ЗА УПОКІЙ\nсорокоуст",
     ),
     Procedure(
-        key="ordered_panakhyda",
-        button="Замовна панахида",
-        title="ЗА УПОКІЙ\nзамовна панахида",
+        key="cathedral_liturgy",
+        button="Соборна літургія",
+        title="ЗА УПОКІЙ\nсоборна літургія",
+    ),
+    Procedure(
+        key="cathedral_panakhyda",
+        button="Соборна панахида",
+        title="ЗА УПОКІЙ\nсоборна панахида",
+    ),
+    Procedure(
+        key="individual_liturgy",
+        button="Індивідуальна літургія",
+        title="ЗА УПОКІЙ\nіндивідуальна літургія",
+    ),
+    Procedure(
+        key="individual_panakhyda",
+        button="Індивідуальна панахида",
+        title="ЗА УПОКІЙ\nіндивідуальна панахида",
     ),
 )
 
