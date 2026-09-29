@@ -1,8 +1,3 @@
-# Starts the printer bot exactly once (two copies would fight over Telegram polling).
-$App = Split-Path -Parent $PSScriptRoot
-
-$running = Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
-    Where-Object { $_.CommandLine -like '*bot.main*' }
-if ($running) { exit 0 }
-
-Start-Process -FilePath "$App\start_bot.bat" -WorkingDirectory $App -WindowStyle Minimized
+﻿# Opens the "ПРИНТЕР Freya" window, which starts the bot and restarts it on crash.
+# The window allows only one copy, so running this twice is harmless.
+Start-Process wscript.exe -ArgumentList "`"$PSScriptRoot\run_hidden.vbs`" printer_window.ps1"

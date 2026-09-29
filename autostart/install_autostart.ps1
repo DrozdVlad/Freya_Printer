@@ -1,4 +1,4 @@
-# Adds the printer bot and UniFi to Windows startup (runs at sign-in),
+﻿# Adds the printer bot and UniFi to Windows startup (runs at sign-in),
 # and points the desktop UniFi icon at the single-copy launcher.
 $app = Split-Path -Parent $PSScriptRoot
 $ps = "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -18,6 +18,18 @@ function New-Link($path, $script, $icon, $workDir) {
 
 New-Link "$startup\Freya Printer Bot.lnk" "$app\autostart\start_bot.ps1" $null $app
 New-Link "$startup\UniFi.lnk" "$app\autostart\start_unifi.ps1" "$unifi\unifi-network.ico" $unifi
+
+# Watchdog: every minute reopens the printer window if it was killed or crashed.
+$action = New-ScheduledTaskAction -Execute 'wscript.exe' `
+    -Argument "`"$app\autostart\run_hidden.vbs`" watchdog.ps1"
+$triggers = @(
+    (New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"),
+    (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1))
+)
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+    -ExecutionTimeLimit (New-TimeSpan -Minutes 5) -MultipleInstances IgnoreNew
+Register-ScheduledTask -TaskName 'Freya Printer Watchdog' -Action $action -Trigger $triggers `
+    -Settings $settings -Force | Out-Null
 
 $desktop = Join-Path ([Environment]::GetFolderPath('Desktop')) 'UniFi.lnk'
 if (Test-Path $desktop) {
